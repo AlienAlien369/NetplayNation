@@ -96,6 +96,34 @@ exports.cancelOrder = async (order) => {
   return won;
 };
 
+// Refunds a paid online order in full. Safe to call repeatedly: only one caller can claim the refund.
+// Returns 'refunded', 'failed' (an admin can retry), or 'none' (nothing to refund).
+exports.refundIfPaid = async (order) => {
+  if (order.paymentMethod !== 'razorpay') return 'none';
+  const claimed = await Order.findOneAndUpdate(
+    { _id: order._id, paymentStatus: 'paid', razorpayPaymentId: { $exists: true } },
+    { paymentStatus: 'refunding' },
+    { new: true }
+  );
+  if (!claimed) return 'none';
+  try {
+    const r = await razorpay.refund(claimed.razorpayPaymentId, claimed.total);
+    await Order.updateOne({ _id: order._id }, { paymentStatus: 'refunded', refundId: r.id, refundFailed: false });
+    return 'refunded';
+  } catch (err) {
+    console.error(`[refund] failed for ${order.orderNumber}:`, err.message);
+    await Order.updateOne({ _id: order._id }, { paymentStatus: 'paid', refundFailed: true });
+    return 'failed';
+  }
+};
+
+// Cancels an order, returns its stock, and refunds it if it was paid online.
+exports.cancelAndRefund = async (order) => {
+  await exports.cancelOrder(order);
+  const refund = await exports.refundIfPaid(order);
+  return { order: await Order.findById(order._id), refund };
+};
+
 // Releases stock held by online-payment orders that were never paid.
 exports.expireUnpaidOrders = async (now = Date.now()) => {
   const cutoff = new Date(now - config.unpaidOrderTtlMs);

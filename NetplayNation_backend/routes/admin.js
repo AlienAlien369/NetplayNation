@@ -4,6 +4,7 @@ const Product = require('../models/Product');
 const Order = require('../models/Order');
 const User = require('../models/User');
 const orders = require('../lib/orders');
+const emails = require('../lib/emails');
 const { buildFilter, listQuery, SORTS } = require('./shop');
 const { z, parse, objectId } = require('../lib/validate');
 const { HttpError, notFound } = require('../lib/http');
@@ -114,16 +115,30 @@ const NEXT = {
 
 router.patch('/orders/:id', async (req, res) => {
   const { status } = parse(z.object({ status: z.enum(STATUSES) }), req.body);
-  const order = await Order.findById(parse(objectId, req.params.id));
+  const order = await Order.findById(parse(objectId, req.params.id)).populate('user', 'name email');
   if (!order) throw notFound('Order not found');
   if (!NEXT[order.status].includes(status)) {
     throw new HttpError(400, `Cannot move an order from ${order.status} to ${status}`);
   }
-  if (status === 'cancelled') return res.json({ order: await orders.cancelOrder(order) });
+  if (status === 'cancelled') {
+    const { order: cancelled, refund } = await orders.cancelAndRefund(order);
+    emails.orderCancelled(cancelled, order.user, { refunded: refund === 'refunded' });
+    return res.json({ order: cancelled, refund });
+  }
   order.status = status;
   if (status === 'delivered' && order.paymentMethod === 'cod') order.paymentStatus = 'paid';
   await order.save();
+  if (status === 'shipped') emails.orderShipped(order, order.user);
   res.json({ order });
+});
+
+router.post('/orders/:id/refund', async (req, res) => {
+  const order = await Order.findById(parse(objectId, req.params.id));
+  if (!order) throw notFound('Order not found');
+  if (order.status !== 'cancelled') throw new HttpError(400, 'Only cancelled orders can be refunded');
+  const refund = await orders.refundIfPaid(order);
+  if (refund === 'none') throw new HttpError(400, 'Nothing to refund on this order');
+  res.json({ order: await Order.findById(order._id), refund });
 });
 
 module.exports = router;

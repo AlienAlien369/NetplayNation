@@ -6,6 +6,10 @@ const userSchema = new Schema(
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     passwordHash: { type: String, required: true, select: false },
     role: { type: String, enum: ['customer', 'admin'], default: 'customer' },
+    wishlist: [{ type: Schema.Types.ObjectId, ref: 'Product' }],
+    resetTokenHash: { type: String, select: false },
+    resetExpires: { type: Date, select: false },
+    passwordChangedAt: Date, // sessions issued before this are rejected
   },
   { timestamps: true }
 );

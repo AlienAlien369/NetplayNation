@@ -29,7 +29,9 @@ const orderSchema = new Schema(
     shipping: Number,
     total: Number,
     paymentMethod: { type: String, enum: ['cod', 'razorpay'], required: true },
-    paymentStatus: { type: String, enum: ['pending', 'paid', 'refunded'], default: 'pending' },
+    paymentStatus: { type: String, enum: ['pending', 'paid', 'refunding', 'refunded'], default: 'pending' },
+    refundId: String,
+    refundFailed: { type: Boolean, default: false }, // automatic refund failed: an admin can retry
     razorpayOrderId: String,
     razorpayPaymentId: String,
     status: {

@@ -22,8 +22,10 @@ exports.loadUser = async (req, _res, next) => {
   const token = req.cookies?.[COOKIE];
   if (token) {
     try {
-      const { sub } = jwt.verify(token, config.jwtSecret);
-      req.user = await User.findById(sub);
+      const { sub, iat } = jwt.verify(token, config.jwtSecret);
+      const user = await User.findById(sub);
+      const changed = user?.passwordChangedAt ? Math.floor(user.passwordChangedAt.getTime() / 1000) : 0;
+      if (user && iat >= changed) req.user = user; // password change/reset signs out older sessions
     } catch {
       /* invalid or expired token: treat as signed out */
     }

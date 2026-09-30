@@ -206,9 +206,10 @@ describe('orders (COD)', () => {
 
 describe('orders (Razorpay)', () => {
   const stub = () => {
-    const orig = razorpay.createOrder;
+    const orig = { createOrder: razorpay.createOrder, refund: razorpay.refund };
     razorpay.createOrder = async ({ amountRupees }) => ({ id: `order_${crypto.randomBytes(4).toString('hex')}`, amount: amountRupees * 100 });
-    return () => (razorpay.createOrder = orig);
+    razorpay.refund = async () => ({ id: 'rfnd_test' });
+    return () => Object.assign(razorpay, orig);
   };
   const sign = (o, p) => crypto.createHmac('sha256', 'rzp_test_secret').update(`${o}|${p}`).digest('hex');
 
@@ -243,7 +244,10 @@ describe('orders (Razorpay)', () => {
       assert.equal((await agent.post(`/api/orders/${body.order.id}/verify`).send(good)).status, 200);
 
       const paidCancel = await agent.post(`/api/orders/${body.order.id}/cancel`);
-      assert.equal(paidCancel.status, 400);
+      assert.equal(paidCancel.status, 200);
+      assert.equal(paidCancel.body.refund, 'refunded');
+      assert.equal(paidCancel.body.order.paymentStatus, 'refunded');
+      assert.equal((await Product.findById(p._id)).stock, 4); // stock returned
     } finally {
       restore();
     }

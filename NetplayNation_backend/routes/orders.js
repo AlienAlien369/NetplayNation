@@ -2,6 +2,7 @@ const router = require('express').Router();
 const Order = require('../models/Order');
 const razorpay = require('../lib/razorpay');
 const orders = require('../lib/orders');
+const emails = require('../lib/emails');
 const { z, parse, objectId } = require('../lib/validate');
 const { HttpError, notFound } = require('../lib/http');
 const { requireAuth } = require('../middleware/auth');
@@ -40,6 +41,7 @@ const mine = async (req) => {
 router.post('/', async (req, res) => {
   const body = parse(createBody, req.body);
   const order = await orders.createOrder({ user: req.user, ...body });
+  if (order.status === 'placed') emails.orderPlaced(order, req.user);
   res.status(201).json({
     order,
     payment: order.paymentMethod === 'razorpay' ? orders.paymentParams(order) : null,
@@ -66,20 +68,29 @@ router.post('/:id/verify', async (req, res) => {
     throw new HttpError(400, 'Payment could not be verified');
   }
   if (order.status === 'cancelled') {
-    throw new HttpError(409, 'This order expired before payment completed. Any amount debited will be refunded.');
+    // Paid after the order expired: record the payment and give the money back.
+    order.paymentStatus = 'paid';
+    order.razorpayPaymentId = b.razorpay_payment_id;
+    await order.save();
+    await orders.refundIfPaid(order);
+    throw new HttpError(409, 'This order expired before payment completed. Your payment is being refunded to the original payment method.');
   }
   order.paymentStatus = 'paid';
   order.razorpayPaymentId = b.razorpay_payment_id;
   order.status = 'placed';
   await order.save();
+  emails.orderPlaced(order, req.user);
   res.json({ order });
 });
 
 router.post('/:id/cancel', async (req, res) => {
   const order = await mine(req);
-  const cancellable = order.status === 'pending_payment' || (order.status === 'placed' && order.paymentStatus !== 'paid');
-  if (!cancellable) throw new HttpError(400, 'This order can no longer be cancelled online. Please contact support.');
-  res.json({ order: await orders.cancelOrder(order) });
+  if (order.status !== 'pending_payment' && order.status !== 'placed') {
+    throw new HttpError(400, 'This order can no longer be cancelled online. Please contact support.');
+  }
+  const { order: cancelled, refund } = await orders.cancelAndRefund(order);
+  emails.orderCancelled(cancelled, req.user, { refunded: refund === 'refunded' });
+  res.json({ order: cancelled, refund });
 });
 
 module.exports = router;

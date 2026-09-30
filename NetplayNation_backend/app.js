@@ -40,6 +40,8 @@ app.use(
   })
 );
 app.use(compression());
+// Must come before express.json(): the webhook signature is computed over the raw bytes.
+app.post('/api/webhooks/razorpay', express.raw({ type: 'application/json', limit: '100kb' }), require('./routes/webhooks'));
 app.use(express.json({ limit: '50kb' }));
 app.use(cookieParser());
 
