@@ -3,6 +3,8 @@ const Product = require('../models/Product');
 const config = require('../config');
 const razorpay = require('../lib/razorpay');
 const { priceCart } = require('../lib/cart');
+const coupons = require('../lib/coupons');
+const cloudinary = require('../lib/cloudinary');
 const { z, parse, objectId } = require('../lib/validate');
 const { notFound } = require('../lib/http');
 
@@ -11,6 +13,7 @@ const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 router.get('/config', (_req, res) =>
   res.json({
     razorpayKeyId: razorpay.enabled() ? razorpay.keyId : null,
+    uploadsEnabled: cloudinary.enabled(),
     freeShippingOver: config.freeShippingOver,
     shippingFee: config.shippingFee,
     maxQtyPerLine: config.maxQtyPerLine,
@@ -25,12 +28,12 @@ const listQuery = z.object({
   maxPrice: z.coerce.number().int().min(0).optional(),
   inStock: z.enum(['1']).optional(),
   featured: z.enum(['1']).optional(),
-  sort: z.enum(['new', 'price_asc', 'price_desc']).default('new'),
+  sort: z.enum(['new', 'price_asc', 'price_desc', 'rating']).default('new'),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(48).default(12),
 });
 
-const SORTS = { new: { createdAt: -1 }, price_asc: { price: 1 }, price_desc: { price: -1 } };
+const SORTS = { new: { createdAt: -1 }, price_asc: { price: 1 }, price_desc: { price: -1 }, rating: { ratingAvg: -1, ratingCount: -1, createdAt: -1 } };
 
 // ponytail: regex search is fine for a catalog of a few thousand products; move to a text/Atlas Search index beyond that.
 const buildFilter = (p, { includeInactive = false } = {}) => {
@@ -90,12 +93,34 @@ router.get('/products/:slug', async (req, res) => {
 
 const quoteBody = z.object({
   items: z.array(z.object({ productId: objectId, qty: z.number().int().min(1).max(999) })).max(30),
+  coupon: z.string().trim().max(20).optional(),
 });
 
-// The cart lives in the browser as ids + quantities. This returns live prices and stock.
+// The cart lives in the browser as ids + quantities. This returns live prices, stock and any coupon discount.
 router.post('/cart/quote', async (req, res) => {
-  const { items } = parse(quoteBody, req.body);
-  res.json({ ...(await priceCart(items)), freeShippingOver: config.freeShippingOver });
+  const { items, coupon } = parse(quoteBody, req.body);
+  const pricing = await priceCart(items);
+  let discount = 0;
+  let couponCode = null;
+  let couponError = null;
+  if (coupon) {
+    try {
+      const r = await coupons.evaluate(coupon, pricing.subtotal, req.user?._id);
+      discount = r.discount;
+      couponCode = r.coupon.code;
+    } catch (e) {
+      if (!e.status) throw e;
+      couponError = e.message; // shown next to the coupon box; the cart itself still prices fine
+    }
+  }
+  res.json({
+    ...pricing,
+    discount,
+    couponCode,
+    couponError,
+    total: pricing.subtotal - discount + pricing.shipping,
+    freeShippingOver: config.freeShippingOver,
+  });
 });
 
 module.exports = router;

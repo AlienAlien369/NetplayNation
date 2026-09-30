@@ -25,6 +25,7 @@ const createBody = z.object({
     .max(30),
   address,
   paymentMethod: z.enum(['cod', 'razorpay']),
+  couponCode: z.string().trim().max(20).optional(),
 });
 const verifyBody = z.object({
   razorpay_order_id: z.string().max(60),

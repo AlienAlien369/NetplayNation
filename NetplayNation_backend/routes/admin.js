@@ -3,6 +3,8 @@ const crypto = require('crypto');
 const Product = require('../models/Product');
 const Order = require('../models/Order');
 const User = require('../models/User');
+const Coupon = require('../models/Coupon');
+const cloudinary = require('../lib/cloudinary');
 const orders = require('../lib/orders');
 const emails = require('../lib/emails');
 const { buildFilter, listQuery, SORTS } = require('./shop');
@@ -34,6 +36,11 @@ async function uniqueSlug(title) {
   const base = slugify(title);
   return (await Product.exists({ slug: base })) ? `${base}-${crypto.randomBytes(2).toString('hex')}` : base;
 }
+
+router.post('/upload-signature', (_req, res) => {
+  if (!cloudinary.enabled()) throw new HttpError(503, 'Image uploads are not set up. Paste an image link instead.');
+  res.json(cloudinary.signUpload());
+});
 
 router.get('/stats', async (_req, res) => {
   const week = new Date(Date.now() - 7 * 864e5);
@@ -86,6 +93,58 @@ router.put('/products/:id', async (req, res) => {
 router.delete('/products/:id', async (req, res) => {
   const product = await Product.findByIdAndDelete(parse(objectId, req.params.id));
   if (!product) throw notFound('Product not found');
+  res.json({ ok: true });
+});
+
+const couponBody = z
+  .object({
+    code: z.string().trim().toUpperCase().regex(/^[A-Z0-9_-]{3,20}$/, '3 to 20 letters, numbers, - or _'),
+    description: z.string().trim().max(140).default(''),
+    type: z.enum(['percent', 'flat']),
+    value: z.coerce.number().int().min(1),
+    minSubtotal: z.coerce.number().int().min(0).default(0),
+    maxDiscount: z.coerce.number().int().min(1).nullish(),
+    expiresAt: z.string().datetime({ offset: true }).or(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).nullish(),
+    usageLimit: z.coerce.number().int().min(1).nullish(),
+    perUserLimit: z.coerce.number().int().min(1).default(1),
+    active: z.boolean().default(true),
+  })
+  .refine((c) => c.type !== 'percent' || c.value <= 100, { message: 'a percentage cannot exceed 100', path: ['value'] });
+
+const toCouponDoc = (c) => ({
+  ...c,
+  maxDiscount: c.maxDiscount || undefined,
+  usageLimit: c.usageLimit || undefined,
+  // A plain date means "valid through the end of that day".
+  expiresAt: c.expiresAt ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(c.expiresAt) ? `${c.expiresAt}T23:59:59.999+05:30` : c.expiresAt) : undefined,
+});
+
+router.get('/coupons', async (_req, res) => {
+  res.json({ items: await Coupon.find().sort({ createdAt: -1 }).limit(200) });
+});
+
+router.post('/coupons', async (req, res) => {
+  const body = toCouponDoc(parse(couponBody, req.body));
+  try {
+    res.status(201).json({ coupon: await Coupon.create(body) });
+  } catch (err) {
+    if (err.code === 11000) throw new HttpError(409, 'A coupon with this code already exists');
+    throw err;
+  }
+});
+
+router.put('/coupons/:id', async (req, res) => {
+  const body = toCouponDoc(parse(couponBody, req.body));
+  const unset = { ...(body.maxDiscount ? {} : { maxDiscount: 1 }), ...(body.usageLimit ? {} : { usageLimit: 1 }), ...(body.expiresAt ? {} : { expiresAt: 1 }) };
+  const set = Object.fromEntries(Object.entries(body).filter(([, v]) => v !== undefined));
+  const coupon = await Coupon.findByIdAndUpdate(parse(objectId, req.params.id), { $set: set, ...(Object.keys(unset).length ? { $unset: unset } : {}) }, { new: true });
+  if (!coupon) throw notFound('Coupon not found');
+  res.json({ coupon });
+});
+
+router.delete('/coupons/:id', async (req, res) => {
+  const coupon = await Coupon.findByIdAndDelete(parse(objectId, req.params.id));
+  if (!coupon) throw notFound('Coupon not found');
   res.json({ ok: true });
 });
 

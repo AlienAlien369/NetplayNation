@@ -5,6 +5,7 @@ const config = require('../config');
 const razorpay = require('./razorpay');
 const { HttpError } = require('./http');
 const { shippingFor } = require('./cart');
+const coupons = require('./coupons');
 
 const orderNumber = () => {
   const d = new Date().toISOString().slice(2, 10).replace(/-/g, '');
@@ -31,7 +32,7 @@ async function reserve(wanted) {
   }
 }
 
-exports.createOrder = async ({ user, items, address, paymentMethod }) => {
+exports.createOrder = async ({ user, items, address, paymentMethod, couponCode }) => {
   if (paymentMethod === 'razorpay' && !razorpay.enabled()) {
     throw new HttpError(400, 'Online payment is not available right now. Please choose Cash on Delivery.');
   }
@@ -52,16 +53,25 @@ exports.createOrder = async ({ user, items, address, paymentMethod }) => {
   }));
   const subtotal = orderItems.reduce((s, i) => s + i.price * i.qty, 0);
   const shipping = shippingFor(subtotal);
-  const total = subtotal + shipping;
 
   let order;
+  let redeemed = null;
   try {
+    let discount = 0;
+    if (couponCode) {
+      const result = await coupons.evaluate(couponCode, subtotal, user._id);
+      if (!(await coupons.redeem(result.coupon))) throw new HttpError(400, 'This coupon has been fully redeemed.');
+      redeemed = result.coupon.code;
+      discount = result.discount;
+    }
+    const total = subtotal - discount + shipping;
     order = await Order.create({
       orderNumber: orderNumber(),
       user: user._id,
       items: orderItems,
       address,
-      subtotal, shipping, total,
+      subtotal, shipping, discount, total,
+      couponCode: redeemed || undefined,
       paymentMethod,
       status: paymentMethod === 'cod' ? 'placed' : 'pending_payment',
     });
@@ -72,6 +82,7 @@ exports.createOrder = async ({ user, items, address, paymentMethod }) => {
     }
   } catch (err) {
     await restock(orderItems);
+    if (redeemed) await coupons.release(redeemed);
     if (order) await Order.deleteOne({ _id: order._id });
     throw err.status ? err : new HttpError(502, 'Could not start payment. Please try again.');
   }
@@ -93,6 +104,7 @@ exports.cancelOrder = async (order) => {
   );
   if (!won) return order; // someone else cancelled first; don't restock twice
   await restock(won.items);
+  if (won.couponCode) await coupons.release(won.couponCode);
   return won;
 };
 

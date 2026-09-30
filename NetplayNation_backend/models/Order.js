@@ -27,6 +27,8 @@ const orderSchema = new Schema(
     },
     subtotal: Number,
     shipping: Number,
+    couponCode: String,
+    discount: { type: Number, default: 0 },
     total: Number,
     paymentMethod: { type: String, enum: ['cod', 'razorpay'], required: true },
     paymentStatus: { type: String, enum: ['pending', 'paid', 'refunding', 'refunded'], default: 'pending' },

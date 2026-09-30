@@ -11,6 +11,8 @@ const productSchema = new Schema(
     mrp: { type: Number, min: 1 }, // list price; shown struck through when above price
     stock: { type: Number, required: true, min: 0, default: 0 },
     images: { type: [String], default: [] },
+    ratingAvg: { type: Number, default: 0 }, // kept in sync by the review routes
+    ratingCount: { type: Number, default: 0 },
     featured: { type: Boolean, default: false },
     active: { type: Boolean, default: true },
   },

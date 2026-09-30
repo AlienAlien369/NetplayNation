@@ -31,7 +31,7 @@ app.use(
         styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", 'data:', 'https:'],
         fontSrc: ["'self'", 'data:'],
-        connectSrc: ["'self'", 'https://*.razorpay.com'],
+        connectSrc: ["'self'", 'https://*.razorpay.com', 'https://api.cloudinary.com'],
         frameSrc: ["'self'", 'https://api.razorpay.com', 'https://checkout.razorpay.com'],
         objectSrc: ["'none'"],
         upgradeInsecureRequests: config.prod ? [] : null,
@@ -61,6 +61,8 @@ api.use(loadUser);
 api.use('/auth', require('./routes/auth'));
 api.use('/orders', require('./routes/orders'));
 api.use('/admin', require('./routes/admin'));
+api.use('/wishlist', require('./routes/wishlist'));
+api.use('/', require('./routes/reviews'));
 api.use('/', require('./routes/shop'));
 api.use((_req, res) => res.status(404).json({ error: 'Not found' }));
 app.use('/api', api);
