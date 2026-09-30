@@ -1,0 +1,20 @@
+# Render Blueprint: one web service serves the API and the built React app on the same origin.
+services:
+  - type: web
+    name: netplaynation
+    runtime: node
+    plan: starter
+    healthCheckPath: /healthz
+    buildCommand: cd NetplayNation_frontend && npm ci && npm run build && cd ../NetplayNation_backend && npm ci --omit=dev
+    startCommand: node NetplayNation_backend/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false

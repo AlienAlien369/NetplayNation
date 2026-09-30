@@ -1,107 +1,31 @@
-const express = require('express');
-// const router = express.Router();
-const dotenv = require('dotenv'); // Correct import statement
-const cors = require('cors');
-const app = express();
-const mongoose  = require('mongoose');
-const Razorpay = require('razorpay');
+const mongoose = require('mongoose');
+const config = require('./config');
+const app = require('./app');
+const { expireUnpaidOrders } = require('./lib/orders');
 
-dotenv.config(); // Load environment variables from .env file
+async function main() {
+  if (!config.mongoUrl) throw new Error('MONGODB_URL is not set. Copy .env.example to .env, or run `npm run dev` for an in-memory database.');
+  await mongoose.connect(config.mongoUrl);
+  console.log('MongoDB connected');
 
+  if (process.env.DEV_MEMORY_DB) {
+    const { seed } = require('./seed');
+    await seed({ adminEmail: 'admin@netplay.test', adminPassword: 'admin12345', demo: true });
+    console.log('Dev database seeded. Admin login: admin@netplay.test / admin12345');
+  }
 
-mongoose.connect(process.env.MONGODB_URL)
-    .then(() => {
-        console.log('momgo db connected successfully');
-    })
-    .catch((err) => {
-        console.log('mongodb not connected due to : ', err);
-    })
+  const server = app.listen(config.port, () => console.log(`Server listening on http://localhost:${config.port}`));
 
-app.use(express.json());
+  // ponytail: single-instance timer; use a shared scheduler/lock if you ever run more than one instance.
+  const timer = setInterval(() => expireUnpaidOrders().catch((e) => console.error('expire job failed', e)), 10 * 60 * 1000);
+  timer.unref();
 
+  const stop = () => server.close(() => mongoose.disconnect().then(() => process.exit(0)));
+  process.on('SIGTERM', stop);
+  process.on('SIGINT', stop);
+}
 
-app.use(cors({
-    origin: process.env.FRONTEND_URL ,
-    credentials: true,
-}));
-
-app.get('/', (req, res) => {
-    res.send("hello server");
-});
-app.use('/auth', require('./routes/authRoutes'));
-app.use('/adminpanel', require('./routes/AdminRoutes'));
-app.use('/user', require('./routes/UserRoutes'));
-app.use('/payment', require('./routes/UserPayments'));
-
-const instance = new Razorpay({
-    key_id: process.env.RAZORPAY_ID_KEY, 
-    key_secret:  process.env.RAZORPAY_SECRET_KEY 
-});
-
-app.post('/create-order', async (req, res) => {
-    try {
-      const order = await instance.orders.create({
-        amount: 50000,
-        currency: 'INR',
-        receipt: 'eceipt#1',
-        partial_payment: false,
-        notes: {
-          key1: 'value3',
-          key2: 'value2',
-        },
-      });
-      res.json(order);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: 'Failed to create order' });
-    }
-  });
-  
-  app.post('/create-payment', async (req, res) => {
-    try {
-      const payment = await instance.payments.createPaymentJson({
-        amount: 100,
-        currency: 'INR',
-        order_id: 'order_EAkbvXiCJlwhHR',
-        email: 'gaurav.kumar@example.com',
-        contact: '9090909090',
-        method: 'upi',
-        vpa: '9090909090@oksomebank',
-        ip: '192.168.0.103',
-        referer: 'http',
-        user_agent: 'Mozilla/5.0',
-        description: 'Test payment',
-        notes: {
-          note_key: 'value1',
-        },
-      });
-      res.json(payment);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: 'Failed to create payment' });
-    }
-  });
-  
-  app.post('/callback', async (req, res) => {
-    try {
-      const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
-      const generatedSignature = hmac_sha256(razorpay_order_id + '|' + razorpay_payment_id, process.env.RAZORPAY_KEY_SECRET);
-      if (generatedSignature === razorpay_signature) {
-        // Payment successful
-        res.json({ success: true });
-      } else {
-        // Payment failed
-        res.json({ success: false });
-      }
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: 'Failed to verify payment signature' });
-    }
-  });
-
-
-const PORT = process.env.PORT || 4000;
-
-app.listen(PORT, () => {
-    console.log('Server is running on port ' + PORT);
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
 });
