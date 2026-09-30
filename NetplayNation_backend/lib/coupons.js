@@ -33,4 +33,4 @@ exports.redeem = async (coupon) => {
   return Boolean(won);
 };
 
-exports.release = (code) => Coupon.updateOne({ code, usedCount: { $gt: 0 } }, { $inc: { usedCount: -1 } });
+exports.release = (id) => Coupon.updateOne({ _id: id, usedCount: { $gt: 0 } }, { $inc: { usedCount: -1 } });

@@ -7,6 +7,8 @@ const { HttpError } = require('./http');
 const { shippingFor } = require('./cart');
 const coupons = require('./coupons');
 
+const MAX_UNPAID = 3; // unpaid online orders one customer may hold stock with at once
+
 const orderNumber = () => {
   const d = new Date().toISOString().slice(2, 10).replace(/-/g, '');
   return `NP-${d}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
@@ -42,6 +44,10 @@ exports.createOrder = async ({ user, items, address, paymentMethod, couponCode }
     throw new HttpError(400, `You can order at most ${config.maxQtyPerLine} of one item.`);
   }
 
+  if (paymentMethod === 'razorpay' && (await Order.countDocuments({ user: user._id, status: 'pending_payment' })) >= MAX_UNPAID) {
+    throw new HttpError(429, 'You have unpaid orders waiting. Please pay for or cancel them before placing another.');
+  }
+
   const products = await Product.find({ _id: { $in: [...merged.keys()] }, active: true });
   if (products.length !== merged.size) throw new HttpError(409, 'Some items in your cart are no longer available.');
   const wanted = products.map((p) => ({ product: p, qty: merged.get(String(p._id)) }));
@@ -55,13 +61,13 @@ exports.createOrder = async ({ user, items, address, paymentMethod, couponCode }
   const shipping = shippingFor(subtotal);
 
   let order;
-  let redeemed = null;
+  let redeemed = null; // the coupon document, once a redemption has been taken
   try {
     let discount = 0;
     if (couponCode) {
       const result = await coupons.evaluate(couponCode, subtotal, user._id);
       if (!(await coupons.redeem(result.coupon))) throw new HttpError(400, 'This coupon has been fully redeemed.');
-      redeemed = result.coupon.code;
+      redeemed = result.coupon;
       discount = result.discount;
     }
     const total = subtotal - discount + shipping;
@@ -71,10 +77,16 @@ exports.createOrder = async ({ user, items, address, paymentMethod, couponCode }
       items: orderItems,
       address,
       subtotal, shipping, discount, total,
-      couponCode: redeemed || undefined,
+      couponCode: redeemed?.code,
+      couponId: redeemed?._id,
       paymentMethod,
       status: paymentMethod === 'cod' ? 'placed' : 'pending_payment',
     });
+    if (redeemed) {
+      // Simultaneous orders can all pass the earlier per-customer check; only the first perUserLimit (by creation order) may keep the discount.
+      const earlier = await Order.countDocuments({ user: user._id, couponId: redeemed._id, status: { $ne: 'cancelled' }, _id: { $lt: order._id } });
+      if (earlier >= redeemed.perUserLimit) throw new HttpError(400, 'You have already used this coupon.');
+    }
     if (paymentMethod === 'razorpay') {
       const rzp = await razorpay.createOrder({ amountRupees: total, receipt: order.orderNumber });
       order.razorpayOrderId = rzp.id;
@@ -82,7 +94,7 @@ exports.createOrder = async ({ user, items, address, paymentMethod, couponCode }
     }
   } catch (err) {
     await restock(orderItems);
-    if (redeemed) await coupons.release(redeemed);
+    if (redeemed) await coupons.release(redeemed._id);
     if (order) await Order.deleteOne({ _id: order._id });
     throw err.status ? err : new HttpError(502, 'Could not start payment. Please try again.');
   }
@@ -95,17 +107,31 @@ exports.paymentParams = (order) => ({
   amount: order.total * 100,
 });
 
-// Cancels an order and returns its stock. No-op if already cancelled.
-exports.cancelOrder = async (order) => {
-  const won = await Order.findOneAndUpdate(
-    { _id: order._id, status: { $ne: 'cancelled' } },
-    { status: 'cancelled' },
+// Cancels an order only if it is still in one of the `from` states, returns its stock and coupon redemption.
+// Returns the cancelled order, or null if the order had already moved on (so nothing is restocked twice or after shipping).
+exports.cancelOrder = async (order, from) => {
+  const won = await Order.findOneAndUpdate({ _id: order._id, status: { $in: from } }, { status: 'cancelled' }, { new: true });
+  if (!won) return null;
+  await restock(won.items);
+  if (won.couponId) await coupons.release(won.couponId);
+  return won;
+};
+
+// Records a captured online payment. Shared by the browser verify call and the Razorpay webhook.
+// Payment and status are claimed with separate atomic updates so a concurrent cancel or expiry can never leave a
+// paid order restocked: if the order was cancelled first, the payment is refunded instead.
+// Returns 'placed', 'refunded' (order was already cancelled), 'failed' (refund needs a retry) or 'duplicate' (already handled).
+exports.confirmPayment = async (orderId, paymentId) => {
+  const claimed = await Order.findOneAndUpdate(
+    { _id: orderId, paymentStatus: 'pending' },
+    { paymentStatus: 'paid', razorpayPaymentId: paymentId },
     { new: true }
   );
-  if (!won) return order; // someone else cancelled first; don't restock twice
-  await restock(won.items);
-  if (won.couponCode) await coupons.release(won.couponCode);
-  return won;
+  if (!claimed) return { outcome: 'duplicate' };
+  const placed = await Order.findOneAndUpdate({ _id: orderId, status: 'pending_payment' }, { status: 'placed' }, { new: true });
+  if (placed) return { outcome: 'placed', order: placed };
+  const refund = await exports.refundIfPaid(claimed);
+  return { outcome: refund === 'failed' ? 'failed' : 'refunded', order: await Order.findById(orderId) };
 };
 
 // Refunds a paid online order in full. Safe to call repeatedly: only one caller can claim the refund.
@@ -130,16 +156,23 @@ exports.refundIfPaid = async (order) => {
 };
 
 // Cancels an order, returns its stock, and refunds it if it was paid online.
-exports.cancelAndRefund = async (order) => {
-  await exports.cancelOrder(order);
-  const refund = await exports.refundIfPaid(order);
+// Repeating the call on an already-cancelled order is harmless; if the order has moved past `from` (for example
+// it was just shipped) this throws 409 instead of refunding goods that are on their way.
+exports.cancelAndRefund = async (order, from) => {
+  const won = await exports.cancelOrder(order, from);
+  const current = await Order.findById(order._id);
+  if (!won && current.status !== 'cancelled') {
+    throw new HttpError(409, `This order is now ${current.status.replace('_', ' ')} and can no longer be cancelled. Please refresh and contact support if needed.`);
+  }
+  const refund = await exports.refundIfPaid(current);
   return { order: await Order.findById(order._id), refund };
 };
 
 // Releases stock held by online-payment orders that were never paid.
 exports.expireUnpaidOrders = async (now = Date.now()) => {
   const cutoff = new Date(now - config.unpaidOrderTtlMs);
-  const stale = await Order.find({ status: 'pending_payment', createdAt: { $lt: cutoff } });
-  for (const o of stale) await exports.cancelOrder(o);
-  return stale.length;
+  const stale = await Order.find({ status: 'pending_payment', paymentStatus: 'pending', createdAt: { $lt: cutoff } });
+  let n = 0;
+  for (const o of stale) if (await exports.cancelOrder(o, ['pending_payment'])) n += 1;
+  return n;
 };

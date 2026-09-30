@@ -21,16 +21,8 @@ module.exports = async (req, res) => {
     return res.json({ ok: true, ignored: true });
   }
 
-  // Claim the order atomically so the browser verify call and this webhook cannot both act on it.
-  const wasCancelled = order.status === 'cancelled';
-  const claimed = await Order.findOneAndUpdate(
-    { _id: order._id, paymentStatus: 'pending' },
-    { paymentStatus: 'paid', razorpayPaymentId: payment.id, ...(wasCancelled ? {} : { status: 'placed' }) },
-    { new: true }
-  );
-  if (!claimed) return res.json({ ok: true });
-
-  if (wasCancelled) await orders.refundIfPaid(claimed); // the order had expired: give the money back
-  else emails.orderPlaced(claimed, order.user);
+  // Same atomic path as the browser verify call, so the two can never both act on one order.
+  const { outcome, order: fresh } = await orders.confirmPayment(order._id, payment.id);
+  if (outcome === 'placed') emails.orderPlaced(fresh, order.user);
   res.json({ ok: true });
 };

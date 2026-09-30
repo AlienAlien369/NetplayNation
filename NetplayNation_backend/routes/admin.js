@@ -26,6 +26,7 @@ const productBody = z
     price: z.coerce.number().int().min(1),
     mrp: z.coerce.number().int().min(1).nullish(),
     stock: z.coerce.number().int().min(0),
+    loadedStock: z.coerce.number().int().min(0).optional(), // stock the edit form started from
     images: z.array(z.string().trim().max(500).regex(/^https?:\/\/\S+$/i, 'must be an http(s) link')).max(8).default([]),
     featured: z.boolean().default(false),
     active: z.boolean().default(true),
@@ -79,13 +80,17 @@ router.get('/products/:id', async (req, res) => {
 });
 
 router.post('/products', async (req, res) => {
-  const body = parse(productBody, req.body);
+  const { loadedStock: _ignored, ...body } = parse(productBody, req.body);
   res.status(201).json({ product: await Product.create({ ...body, slug: await uniqueSlug(body.title) }) });
 });
 
 router.put('/products/:id', async (req, res) => {
-  const body = parse(productBody, req.body);
-  const product = await Product.findByIdAndUpdate(parse(objectId, req.params.id), body, { new: true });
+  const { loadedStock, stock, ...fields } = parse(productBody, req.body);
+  const id = parse(objectId, req.params.id);
+  // When the form says what stock it started from, apply only the admin's change so orders placed meanwhile are not lost.
+  const update = loadedStock === undefined ? { $set: { ...fields, stock } } : { $set: fields, $inc: { stock: stock - loadedStock } };
+  let product = await Product.findByIdAndUpdate(id, update, { new: true });
+  if (product && product.stock < 0) product = await Product.findByIdAndUpdate(id, { stock: 0 }, { new: true });
   if (!product) throw notFound('Product not found');
   res.json({ product });
 });
@@ -180,15 +185,17 @@ router.patch('/orders/:id', async (req, res) => {
     throw new HttpError(400, `Cannot move an order from ${order.status} to ${status}`);
   }
   if (status === 'cancelled') {
-    const { order: cancelled, refund } = await orders.cancelAndRefund(order);
+    // Only cancels if the order is still in the state the admin saw; otherwise 409 (never refunds a shipped order).
+    const { order: cancelled, refund } = await orders.cancelAndRefund(order, [order.status]);
     emails.orderCancelled(cancelled, order.user, { refunded: refund === 'refunded' });
     return res.json({ order: cancelled, refund });
   }
-  order.status = status;
-  if (status === 'delivered' && order.paymentMethod === 'cod') order.paymentStatus = 'paid';
-  await order.save();
-  if (status === 'shipped') emails.orderShipped(order, order.user);
-  res.json({ order });
+  const set = { status };
+  if (status === 'delivered' && order.paymentMethod === 'cod') set.paymentStatus = 'paid';
+  const updated = await Order.findOneAndUpdate({ _id: order._id, status: order.status }, set, { new: true });
+  if (!updated) throw new HttpError(409, 'This order was just changed by someone else. Refresh and try again.');
+  if (status === 'shipped') emails.orderShipped(updated, order.user);
+  res.json({ order: updated });
 });
 
 router.post('/orders/:id/refund', async (req, res) => {

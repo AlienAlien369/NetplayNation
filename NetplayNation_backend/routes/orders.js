@@ -61,27 +61,22 @@ router.get('/:id', async (req, res) => {
 router.post('/:id/verify', async (req, res) => {
   const b = parse(verifyBody, req.body);
   const order = await mine(req);
-  if (order.paymentStatus === 'paid') return res.json({ order }); // idempotent
+  if (order.paymentStatus !== 'pending') return res.json({ order }); // replay, or already handled (paid, refunding, refunded)
   if (order.paymentMethod !== 'razorpay' || order.razorpayOrderId !== b.razorpay_order_id) {
     throw new HttpError(400, 'Payment does not match this order');
   }
   if (!razorpay.verifySignature(b.razorpay_order_id, b.razorpay_payment_id, b.razorpay_signature)) {
     throw new HttpError(400, 'Payment could not be verified');
   }
-  if (order.status === 'cancelled') {
-    // Paid after the order expired: record the payment and give the money back.
-    order.paymentStatus = 'paid';
-    order.razorpayPaymentId = b.razorpay_payment_id;
-    await order.save();
-    await orders.refundIfPaid(order);
-    throw new HttpError(409, 'This order expired before payment completed. Your payment is being refunded to the original payment method.');
+  const { outcome } = await orders.confirmPayment(order._id, b.razorpay_payment_id);
+  const fresh = await Order.findById(order._id);
+  if (outcome === 'duplicate') return res.json({ order: fresh });
+  if (outcome === 'placed') {
+    emails.orderPlaced(fresh, req.user);
+    return res.json({ order: fresh });
   }
-  order.paymentStatus = 'paid';
-  order.razorpayPaymentId = b.razorpay_payment_id;
-  order.status = 'placed';
-  await order.save();
-  emails.orderPlaced(order, req.user);
-  res.json({ order });
+  // The order was cancelled or expired before the payment arrived: the money is being returned.
+  throw new HttpError(409, 'This order expired before payment completed. Your payment is being refunded to the original payment method.');
 });
 
 router.post('/:id/cancel', async (req, res) => {
@@ -89,7 +84,7 @@ router.post('/:id/cancel', async (req, res) => {
   if (order.status !== 'pending_payment' && order.status !== 'placed') {
     throw new HttpError(400, 'This order can no longer be cancelled online. Please contact support.');
   }
-  const { order: cancelled, refund } = await orders.cancelAndRefund(order);
+  const { order: cancelled, refund } = await orders.cancelAndRefund(order, ['pending_payment', 'placed']);
   emails.orderCancelled(cancelled, req.user, { refunded: refund === 'refunded' });
   res.json({ order: cancelled, refund });
 });

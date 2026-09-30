@@ -54,8 +54,11 @@ const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 // Always answers the same way so the endpoint cannot be used to discover which emails have accounts.
 router.post('/forgot', limiter, async (req, res) => {
   const { email: address } = parse(z.object({ email }), req.body);
-  const user = await User.findOne({ email: address });
-  if (user) {
+  const user = await User.findOne({ email: address }).select('+resetExpires');
+  // A token issued in the last minute stays valid and is not replaced, so nobody can flood an inbox
+  // or keep invalidating a victim's pending link. The response is identical either way.
+  const issuedJustNow = user?.resetExpires && user.resetExpires.getTime() - Date.now() > 59 * 60 * 1000;
+  if (user && !issuedJustNow) {
     const token = crypto.randomBytes(32).toString('hex');
     user.resetTokenHash = sha256(token);
     user.resetExpires = new Date(Date.now() + 60 * 60 * 1000);

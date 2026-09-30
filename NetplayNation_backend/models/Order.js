@@ -29,6 +29,7 @@ const orderSchema = new Schema(
     subtotal: Number,
     shipping: Number,
     couponCode: String,
+    couponId: { type: Schema.Types.ObjectId, ref: 'Coupon' },
     discount: { type: Number, default: 0 },
     total: Number,
     paymentMethod: { type: String, enum: ['cod', 'razorpay'], required: true },

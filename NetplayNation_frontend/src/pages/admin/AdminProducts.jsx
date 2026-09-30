@@ -155,7 +155,7 @@ export function ProductForm() {
   useEffect(() => {
     if (!id) return;
     api(`/admin/products/${id}`)
-      .then(({ product: p }) => setForm({ ...p, mrp: p.mrp ?? '' }))
+      .then(({ product: p }) => setForm({ ...p, mrp: p.mrp ?? '', loadedStock: p.stock }))
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, [id]);
@@ -171,6 +171,7 @@ export function ProductForm() {
       price: Number(form.price), stock: Number(form.stock), mrp: form.mrp === '' ? null : Number(form.mrp),
       images: form.images,
       featured: form.featured, active: form.active,
+      ...(id ? { loadedStock: form.loadedStock } : {}),
     };
     try {
       await api(id ? `/admin/products/${id}` : '/admin/products', { method: id ? 'PUT' : 'POST', body });
