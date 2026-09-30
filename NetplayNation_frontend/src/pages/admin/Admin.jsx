@@ -5,6 +5,7 @@ import { api, fmtDate, rupees } from '../../api';
 import { STATUS_LABEL } from '../../site';
 import { ErrorState, StatusBadge, useApi, useTitle } from '../../components/ui';
 import { ProductForm, ProductList } from './AdminProducts';
+import { CouponForm, CouponList } from './AdminCoupons';
 
 const NEXT = {
   pending_payment: [['cancelled', 'Cancel']],
@@ -57,11 +58,20 @@ function OrderRows() {
   const { data, error, loading, reload } = useApi(`/admin/orders?page=${page}${status ? `&status=${status}` : ''}`);
 
   const move = async (o, next) => {
-    const warn = next === 'cancelled' && o.paymentStatus === 'paid' ? ' This order is already paid online: refund it in the Razorpay dashboard.' : '';
+    const warn = next === 'cancelled' && o.paymentMethod === 'razorpay' && o.paymentStatus === 'paid' ? ` The customer will be refunded ${rupees(o.total)} automatically.` : '';
     if (next === 'cancelled' && !window.confirm(`Cancel order ${o.orderNumber}? Stock will be returned.${warn}`)) return;
     try {
-      await api(`/admin/orders/${o.id}`, { method: 'PATCH', body: { status: next } });
-      toast.success(`Order ${STATUS_LABEL[next].toLowerCase()}`);
+      const res = await api(`/admin/orders/${o.id}`, { method: 'PATCH', body: { status: next } });
+      if (res.refund === 'failed') toast.error('Order cancelled, but the automatic refund failed. Use Retry refund.');
+      else toast.success(res.refund === 'refunded' ? 'Order cancelled and refunded' : `Order ${STATUS_LABEL[next].toLowerCase()}`);
+      reload();
+    } catch (e) { toast.error(e.message); }
+  };
+
+  const retryRefund = async (o) => {
+    try {
+      await api(`/admin/orders/${o.id}/refund`, { method: 'POST' });
+      toast.success('Refund started');
       reload();
     } catch (e) { toast.error(e.message); }
   };
@@ -91,9 +101,9 @@ function OrderRows() {
                     <td>{o.user?.name}<div className="muted" style={{ fontSize: '.85rem' }}>{o.user?.email}</div></td>
                     <td>{fmtDate(o.createdAt)}</td>
                     <td>{rupees(o.total)}</td>
-                    <td>{o.paymentMethod === 'cod' ? 'COD' : 'Online'}<div><span className={`badge ${o.paymentStatus === 'paid' ? 'badge-ok' : ''}`}>{o.paymentStatus}</span></div></td>
+                    <td>{o.paymentMethod === 'cod' ? 'COD' : 'Online'}<div><span className={`badge ${o.paymentStatus === 'paid' ? 'badge-ok' : ''}`}>{o.paymentStatus}</span></div>{o.refundFailed && o.paymentStatus === 'paid' && <div><span className="badge badge-danger">Refund failed</span></div>}</td>
                     <td><StatusBadge status={o.status} /></td>
-                    <td><div className="row-actions">{NEXT[o.status].map(([n, label]) => <button key={n} className={`btn btn-sm ${n === 'cancelled' ? 'btn-danger' : 'btn-primary'}`} onClick={() => move(o, n)}>{label}</button>)}</div></td>
+                    <td><div className="row-actions">{o.refundFailed && o.paymentStatus === 'paid' && o.status === 'cancelled' && <button className="btn btn-sm btn-primary" onClick={() => retryRefund(o)}>Retry refund</button>}{NEXT[o.status].map(([n, label]) => <button key={n} className={`btn btn-sm ${n === 'cancelled' ? 'btn-danger' : 'btn-primary'}`} onClick={() => move(o, n)}>{label}</button>)}</div></td>
                   </tr>
                   {open === o.id && (
                     <tr>
@@ -131,6 +141,7 @@ export default function Admin() {
         <NavLink to="/admin" end className={link}>Dashboard</NavLink>
         <NavLink to="/admin/products" className={link}>Products</NavLink>
         <NavLink to="/admin/orders" className={link}>Orders</NavLink>
+        <NavLink to="/admin/coupons" className={link}>Coupons</NavLink>
       </nav>
       <Routes>
         <Route index element={<Dashboard />} />
@@ -138,6 +149,9 @@ export default function Admin() {
         <Route path="products/new" element={<ProductForm />} />
         <Route path="products/:id" element={<ProductForm />} />
         <Route path="orders" element={<OrderRows />} />
+        <Route path="coupons" element={<CouponList />} />
+        <Route path="coupons/new" element={<CouponForm />} />
+        <Route path="coupons/:id" element={<CouponForm />} />
       </Routes>
     </div>
   );

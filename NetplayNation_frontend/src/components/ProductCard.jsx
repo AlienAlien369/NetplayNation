@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useCart } from '../state';
-import { discountPct, Price, ProductImage } from './ui';
+import { discountPct, Price, ProductImage, RatingLine, WishlistButton } from './ui';
 
 export default function ProductCard({ product }) {
   const { add } = useCart();
@@ -11,18 +11,22 @@ export default function ProductCard({ product }) {
 
   return (
     <article className="card">
-      <Link to={href} className="card-media" tabIndex={-1} aria-hidden="true">
-        <ProductImage product={product} />
+      <div className="card-media">
+        <Link to={href} tabIndex={-1} aria-hidden="true" className="card-media-link">
+          <ProductImage product={product} />
+        </Link>
         <div className="card-flags">
           {off > 0 && !soldOut && <span className="badge badge-sale">{off}% off</span>}
           {soldOut && <span className="badge">Sold out</span>}
         </div>
-      </Link>
+        <WishlistButton productId={product.id} title={product.title} className="heart-card" />
+      </div>
       <div className="card-body">
         <span className="card-brand">{product.brand}</span>
         <h3 className="card-title">
           <Link to={href}>{product.title}</Link>
         </h3>
+        <RatingLine avg={product.ratingAvg} count={product.ratingCount} size={14} />
         <div className="card-foot">
           <Price price={product.price} mrp={product.mrp} />
           {!soldOut && product.stock <= 5 && <span className="stock-note">Only {product.stock} left</span>}

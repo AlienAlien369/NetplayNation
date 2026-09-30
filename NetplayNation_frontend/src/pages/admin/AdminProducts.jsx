@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Plus, WarningCircle } from '@phosphor-icons/react';
-import { api, rupees } from '../../api';
+import { ArrowLineUp, Plus, Trash, UploadSimple, WarningCircle } from '@phosphor-icons/react';
+import { api, getConfig, rupees } from '../../api';
 import { ErrorState, Field, ProductImage, useApi, useTitle } from '../../components/ui';
 
 export function ProductList() {
@@ -60,7 +60,85 @@ export function ProductList() {
   );
 }
 
-const empty = { title: '', brand: '', category: '', price: '', mrp: '', stock: '', images: '', description: '', featured: false, active: true };
+const empty = { title: '', brand: '', category: '', price: '', mrp: '', stock: '', images: [], description: '', featured: false, active: true };
+
+const MAX_IMAGES = 8;
+const MAX_UPLOAD_MB = 8;
+
+// Uploads one file straight to Cloudinary using a signature from our admin-only endpoint.
+async function uploadToCloudinary(file) {
+  const sig = await api('/admin/upload-signature', { method: 'POST' });
+  const body = new FormData();
+  body.append('file', file);
+  body.append('api_key', sig.apiKey);
+  body.append('timestamp', sig.timestamp);
+  body.append('folder', sig.folder);
+  body.append('signature', sig.signature);
+  const res = await fetch(`https://api.cloudinary.com/v1_1/${sig.cloudName}/image/upload`, { method: 'POST', body });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.secure_url) throw new Error(json.error?.message || 'Upload failed');
+  return json.secure_url;
+}
+
+function ImageManager({ images, onChange, uploadsEnabled }) {
+  const [busy, setBusy] = useState(0);
+  const [link, setLink] = useState('');
+
+  const add = (urls) => onChange([...images, ...urls].slice(0, MAX_IMAGES));
+  const upload = async (e) => {
+    const files = [...e.target.files].slice(0, MAX_IMAGES - images.length);
+    e.target.value = '';
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) { toast.error(`${file.name} is not an image`); continue; }
+      if (file.size > MAX_UPLOAD_MB * 1024 * 1024) { toast.error(`${file.name} is larger than ${MAX_UPLOAD_MB} MB`); continue; }
+      setBusy((n) => n + 1);
+      try {
+        const url = await uploadToCloudinary(file);
+        onChange((cur) => [...cur, url].slice(0, MAX_IMAGES));
+      } catch (err) {
+        toast.error(`${file.name}: ${err.message}`);
+      } finally {
+        setBusy((n) => n - 1);
+      }
+    }
+  };
+  const addLink = () => {
+    if (!/^https?:\/\/\S+$/i.test(link.trim())) return toast.error('Enter a link starting with https://');
+    add([link.trim()]);
+    setLink('');
+  };
+
+  return (
+    <div className="field span-2">
+      <span className="label">Images ({images.length} of {MAX_IMAGES})</span>
+      <div className="img-grid">
+        {images.map((src, i) => (
+          <div className="img-tile" key={src}>
+            <img src={src} alt={`Product image ${i + 1}`} />
+            {i === 0 && <span className="badge badge-ok">Main</span>}
+            <div className="img-actions">
+              {i > 0 && <button type="button" className="icon-btn" aria-label={`Make image ${i + 1} the main image`} onClick={() => onChange([src, ...images.filter((x) => x !== src)])}><ArrowLineUp size={18} /></button>}
+              <button type="button" className="icon-btn" aria-label={`Remove image ${i + 1}`} onClick={() => onChange(images.filter((x) => x !== src))}><Trash size={18} /></button>
+            </div>
+          </div>
+        ))}
+        {Array.from({ length: busy }, (_, i) => <div className="img-tile skeleton" key={`u${i}`} aria-label="Uploading" />)}
+      </div>
+      <div className="toolbar" style={{ marginTop: 10 }}>
+        {uploadsEnabled && (
+          <label className="btn btn-sm" style={{ cursor: 'pointer' }}>
+            <UploadSimple size={18} /> Upload photos
+            <input type="file" accept="image/*" multiple hidden onChange={upload} disabled={images.length >= MAX_IMAGES} />
+          </label>
+        )}
+        <label className="sr-only" htmlFor="img-link">Image link</label>
+        <input id="img-link" className="input" style={{ minWidth: 220 }} placeholder="Or paste an image link (https://...)" value={link} onChange={(e) => setLink(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addLink(); } }} />
+        <button type="button" className="btn btn-sm" onClick={addLink} disabled={images.length >= MAX_IMAGES}>Add link</button>
+      </div>
+      {!uploadsEnabled && <span className="field-hint">Photo upload is not set up yet. Add Cloudinary keys on the server to enable it (see the README).</span>}
+    </div>
+  );
+}
 
 export function ProductForm() {
   const { id } = useParams();
@@ -71,11 +149,13 @@ export function ProductForm() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const facets = useApi('/facets');
+  const [uploadsEnabled, setUploadsEnabled] = useState(false);
+  useEffect(() => { getConfig().then((c) => setUploadsEnabled(c.uploadsEnabled)).catch(() => {}); }, []);
 
   useEffect(() => {
     if (!id) return;
     api(`/admin/products/${id}`)
-      .then(({ product: p }) => setForm({ ...p, mrp: p.mrp ?? '', images: p.images.join('\n') }))
+      .then(({ product: p }) => setForm({ ...p, mrp: p.mrp ?? '' }))
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, [id]);
@@ -89,7 +169,7 @@ export function ProductForm() {
     const body = {
       title: form.title, brand: form.brand, category: form.category, description: form.description,
       price: Number(form.price), stock: Number(form.stock), mrp: form.mrp === '' ? null : Number(form.mrp),
-      images: form.images.split('\n').map((s) => s.trim()).filter(Boolean),
+      images: form.images,
       featured: form.featured, active: form.active,
     };
     try {
@@ -119,7 +199,7 @@ export function ProductForm() {
         <Field id="mrp" label="MRP (INR, optional)" hint="Shown struck through when higher than the price"><input id="mrp" className="input" type="number" min="1" step="1" value={form.mrp} onChange={set('mrp')} /></Field>
         <Field id="stock" label="Stock"><input id="stock" className="input" type="number" min="0" step="1" required value={form.stock} onChange={set('stock')} /></Field>
         <div />
-        <Field id="images" label="Image links" hint="One https link per line. The first is the main image." className="span-2"><textarea id="images" className="textarea" value={form.images} onChange={set('images')} placeholder="https://..." /></Field>
+        <ImageManager images={form.images} onChange={(v) => setForm((f) => ({ ...f, images: typeof v === 'function' ? v(f.images) : v }))} uploadsEnabled={uploadsEnabled} />
         <Field id="description" label="Description" className="span-2"><textarea id="description" className="textarea" maxLength={4000} value={form.description} onChange={set('description')} /></Field>
         <label className="check"><input type="checkbox" checked={form.active} onChange={set('active')} /> Visible in the shop</label>
         <label className="check"><input type="checkbox" checked={form.featured} onChange={set('featured')} /> Featured on the home page</label>

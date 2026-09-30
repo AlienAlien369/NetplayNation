@@ -49,7 +49,7 @@ exports.createOrder = async ({ user, items, address, paymentMethod, couponCode }
   await reserve(wanted);
 
   const orderItems = wanted.map(({ product: p, qty }) => ({
-    product: p._id, title: p.title, image: p.images?.[0] || '', price: p.price, qty,
+    product: p._id, title: p.title, slug: p.slug, image: p.images?.[0] || '', price: p.price, qty,
   }));
   const subtotal = orderItems.reduce((s, i) => s + i.price * i.qty, 0);
   const shipping = shippingFor(subtotal);

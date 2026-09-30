@@ -9,6 +9,7 @@ const SORTS = [
   ['new', 'Newest'],
   ['price_asc', 'Price: low to high'],
   ['price_desc', 'Price: high to low'],
+  ['rating', 'Top rated'],
 ];
 
 export default function Shop() {

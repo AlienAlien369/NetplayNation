@@ -4,6 +4,7 @@ const itemSchema = new Schema(
   {
     product: { type: Schema.Types.ObjectId, ref: 'Product', required: true },
     title: String,
+    slug: String,
     image: String,
     price: Number,
     qty: Number,

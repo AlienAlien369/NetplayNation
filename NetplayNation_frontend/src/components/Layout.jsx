@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { ClipboardText, List, MagnifyingGlass, ShoppingCartSimple, SignOut, Storefront, User, X } from '@phosphor-icons/react';
-import { useAuth, useCart } from '../state';
+import { ClipboardText, Heart, List, MagnifyingGlass, ShoppingCartSimple, SignOut, Storefront, User, X } from '@phosphor-icons/react';
+import { useAuth, useCart, useWishlist } from '../state';
 import { SITE } from '../site';
 
 function SearchBox({ onDone }) {
@@ -62,6 +62,7 @@ function AccountMenu() {
         <div className="menu">
           <div className="who"><b>{user.name}</b><div className="muted" style={{ fontSize: '.9rem', overflow: 'hidden', textOverflow: 'ellipsis' }}>{user.email}</div></div>
           <Link to="/orders"><ClipboardText size={20} /> My orders</Link>
+          <Link to="/wishlist"><Heart size={20} /> Wishlist</Link>
           {user.role === 'admin' && <Link to="/admin"><Storefront size={20} /> Admin panel</Link>}
           <button onClick={async () => { await logout(); nav('/'); }}><SignOut size={20} /> Sign out</button>
         </div>
@@ -72,6 +73,7 @@ function AccountMenu() {
 
 function Header() {
   const { count } = useCart();
+  const wish = useWishlist();
   const [drawer, setDrawer] = useState(false);
   const { pathname } = useLocation();
   useEffect(() => {
@@ -92,6 +94,10 @@ function Header() {
           </nav>
           <SearchBox />
           <div className="header-actions">
+            <Link to="/wishlist" className="icon-btn hide-mobile" aria-label={`Wishlist, ${wish.count} item${wish.count === 1 ? '' : 's'}`}>
+              <Heart size={26} />
+              {wish.count > 0 && <span className="cart-count">{wish.count}</span>}
+            </Link>
             <Link to="/cart" className="icon-btn" aria-label={`Cart, ${count} item${count === 1 ? '' : 's'}`}>
               <ShoppingCartSimple size={26} />
               {count > 0 && <span className="cart-count">{count}</span>}

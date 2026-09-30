@@ -5,7 +5,8 @@ import { ArrowsClockwise, CreditCard, Money, Truck } from '@phosphor-icons/react
 import { rupees } from '../api';
 import { useCart } from '../state';
 import ProductCard from '../components/ProductCard';
-import { ErrorState, Price, ProductImage, Qty, useApi, useTitle } from '../components/ui';
+import Reviews from '../components/Reviews';
+import { ErrorState, Price, ProductImage, Qty, RatingLine, WishlistButton, useApi, useTitle } from '../components/ui';
 
 export default function Product() {
   const { slug } = useParams();
@@ -19,7 +20,7 @@ export default function Product() {
   useTitle(p?.title, p ? `${p.title} by ${p.brand}. ${rupees(p.price)} with cash on delivery and secure online payment.` : undefined);
   useEffect(() => { setQty(1); setImg(0); }, [slug]);
 
-  if (loading) {
+  if (loading && !data) {
     return (
       <div className="container page" aria-busy="true">
         <div className="pdp"><div className="skeleton" style={{ aspectRatio: '1/1' }} /><div style={{ display: 'grid', gap: 14 }}><div className="skeleton" style={{ height: 20, width: '30%' }} /><div className="skeleton" style={{ height: 56 }} /><div className="skeleton" style={{ height: 40, width: '40%' }} /></div></div>
@@ -60,6 +61,7 @@ export default function Product() {
         <div className="pdp-info">
           <span className="card-brand">{p.brand}</span>
           <h1>{p.title}</h1>
+          <div style={{ marginBottom: 8 }}><RatingLine avg={p.ratingAvg} count={p.ratingCount} size={18} /></div>
           <Price price={p.price} mrp={p.mrp} size="lg" />
           <p className="muted" style={{ marginTop: 4 }}>Inclusive of all taxes</p>
 
@@ -75,6 +77,7 @@ export default function Product() {
                 <div className="buy-row">
                   <button className="btn btn-primary btn-lg" onClick={() => { add(p.id, qty); toast.success('Added to cart'); }}>Add to cart</button>
                   <button className="btn btn-lg" onClick={() => { add(p.id, qty); nav('/checkout'); }}>Buy now</button>
+                  <WishlistButton productId={p.id} title={p.title} className="heart-inline" />
                 </div>
               </>
             )}
@@ -89,6 +92,8 @@ export default function Product() {
           {p.description && <p className="desc">{p.description}</p>}
         </div>
       </div>
+
+      <Reviews slug={p.slug} onChanged={reload} />
 
       {data.related.length > 0 && (
         <section className="section" style={{ paddingBottom: 0 }}>

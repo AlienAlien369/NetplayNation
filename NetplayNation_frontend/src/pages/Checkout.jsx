@@ -6,7 +6,7 @@ import { api, getConfig, payOrder, rupees } from '../api';
 import { useAuth, useCart } from '../state';
 import { STATES } from '../site';
 import { Field, ProductImage, useTitle } from '../components/ui';
-import { useQuote } from './Cart';
+import { CouponBox, useQuote } from './Cart';
 
 const ADDR_KEY = 'np_addr_v1';
 const blank = { name: '', phone: '', line1: '', line2: '', city: '', state: '', pincode: '' };
@@ -74,7 +74,7 @@ export default function Checkout() {
       const address = Object.fromEntries(Object.entries(addr).map(([k, val]) => [k, val.trim()]));
       const res = await api('/orders', {
         method: 'POST',
-        body: { items: items.map((i) => ({ productId: i.id, qty: i.qty })), address, paymentMethod: method },
+        body: { items: items.map((i) => ({ productId: i.id, qty: i.qty })), address, paymentMethod: method, couponCode: quote.couponCode || undefined },
       });
       try { localStorage.setItem(ADDR_KEY, JSON.stringify(address)); } catch { /* ignore */ }
       clear(); // the cart now belongs to the order
@@ -140,8 +140,10 @@ export default function Checkout() {
             ))}
           </div>
           <div className="sum-row" style={{ marginTop: 8 }}><span>Subtotal</span><span>{rupees(quote.subtotal)}</span></div>
+          {quote.discount > 0 && <div className="sum-row" style={{ color: 'var(--ok)' }}><span>Discount ({quote.couponCode})</span><span>-{rupees(quote.discount)}</span></div>}
           <div className="sum-row"><span>Shipping</span><span>{quote.shipping === 0 ? 'Free' : rupees(quote.shipping)}</span></div>
           <div className="sum-row sum-total"><span>Total</span><span>{rupees(quote.total)}</span></div>
+          <div style={{ marginTop: 14 }}><CouponBox quote={quote} /></div>
           <button className="btn btn-primary btn-lg btn-block" style={{ marginTop: 18 }} disabled={busy || !live.length}>
             {busy ? 'Placing order' : method === 'cod' ? 'Place order' : `Pay ${rupees(quote.total)}`}
           </button>

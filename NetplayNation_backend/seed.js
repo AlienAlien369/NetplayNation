@@ -54,6 +54,13 @@ async function seed({ adminEmail, adminPassword, demo = false }) {
       console.log(`Existing user ${email} is now admin`);
     }
   }
+  if (demo) {
+    const Coupon = require('./models/Coupon');
+    if (!(await Coupon.exists({ code: 'WELCOME10' }))) {
+      await Coupon.create({ code: 'WELCOME10', description: '10% off your first order', type: 'percent', value: 10, minSubtotal: 999, maxDiscount: 300 });
+      console.log('Seeded demo coupon WELCOME10');
+    }
+  }
   if (demo && (await Product.countDocuments()) === 0) {
     const slugify = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     const now = Date.now();

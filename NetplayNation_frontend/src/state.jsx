@@ -30,7 +30,62 @@ export function AuthProvider({ children }) {
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
 }
 
+const WishCtx = createContext(null);
+export const useWishlist = () => useContext(WishCtx);
+
+// Saved product ids for the signed-in customer. Guests get null from toggle() so the UI can send them to sign in.
+export function WishlistProvider({ children }) {
+  const { user } = useAuth();
+  const [ids, setIds] = useState(() => new Set());
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!user) {
+      setIds(new Set());
+      setLoaded(false);
+      return undefined;
+    }
+    let live = true;
+    api('/wishlist')
+      .then((r) => {
+        if (!live) return;
+        setIds(new Set(r.ids));
+        setLoaded(true);
+      })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [user]);
+
+  const toggle = useCallback(
+    async (id) => {
+      if (!user) return null;
+      const saved = ids.has(id);
+      setIds((cur) => {
+        const next = new Set(cur);
+        if (saved) next.delete(id); else next.add(id);
+        return next;
+      });
+      try {
+        await api(`/wishlist/${id}`, { method: saved ? 'DELETE' : 'PUT' });
+        return !saved;
+      } catch (e) {
+        setIds((cur) => {
+          const next = new Set(cur);
+          if (saved) next.add(id); else next.delete(id);
+          return next;
+        });
+        throw e;
+      }
+    },
+    [user, ids]
+  );
+
+  const value = useMemo(() => ({ ids, loaded, has: (id) => ids.has(id), toggle, count: ids.size }), [ids, loaded, toggle]);
+  return <WishCtx.Provider value={value}>{children}</WishCtx.Provider>;
+}
+
 const KEY = 'np_cart_v1';
+const COUPON_KEY = 'np_coupon_v1';
 const read = () => {
   try {
     const v = JSON.parse(localStorage.getItem(KEY));
@@ -43,6 +98,15 @@ const read = () => {
 // The cart stores only ids and quantities. Prices and stock always come from the server.
 export function CartProvider({ children }) {
   const [items, setItems] = useState(read);
+  const [coupon, setCouponState] = useState(() => {
+    try { return localStorage.getItem(COUPON_KEY) || ''; } catch { return ''; }
+  });
+  const setCoupon = useCallback((code) => {
+    setCouponState(code);
+    try {
+      if (code) localStorage.setItem(COUPON_KEY, code); else localStorage.removeItem(COUPON_KEY);
+    } catch { /* ignore */ }
+  }, []);
 
   useEffect(() => {
     try {
@@ -66,11 +130,14 @@ export function CartProvider({ children }) {
     setItems((cur) => (qty <= 0 ? cur.filter((i) => i.id !== id) : cur.map((i) => (i.id === id ? { ...i, qty: Math.min(qty, 10) } : i))));
   }, []);
   const remove = useCallback((id) => setItems((cur) => cur.filter((i) => i.id !== id)), []);
-  const clear = useCallback(() => setItems([]), []);
+  const clear = useCallback(() => {
+    setItems([]);
+    setCoupon('');
+  }, [setCoupon]);
 
   const value = useMemo(
-    () => ({ items, add, setQty, remove, clear, count: items.reduce((s, i) => s + i.qty, 0) }),
-    [items, add, setQty, remove, clear]
+    () => ({ items, add, setQty, remove, clear, coupon, setCoupon, count: items.reduce((s, i) => s + i.qty, 0) }),
+    [items, add, setQty, remove, clear, coupon, setCoupon]
   );
   return <CartCtx.Provider value={value}>{children}</CartCtx.Provider>;
 }

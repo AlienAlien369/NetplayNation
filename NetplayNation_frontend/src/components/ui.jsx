@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Minus, Plus, WarningCircle } from '@phosphor-icons/react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { Heart, Minus, Plus, Star, WarningCircle } from '@phosphor-icons/react';
 import { api, rupees } from '../api';
+import { useWishlist } from '../state';
 import { categoryIcon, SITE, STATUS_LABEL } from '../site';
 
 export function useTitle(title, description) {
@@ -105,3 +108,52 @@ export const Field = ({ label, error, hint, children, id, className = '' }) => (
 
 const STATUS_TONE = { pending_payment: 'badge-warn', placed: '', packed: '', shipped: 'badge-ok', delivered: 'badge-ok', cancelled: 'badge-danger' };
 export const StatusBadge = ({ status }) => <span className={`badge ${STATUS_TONE[status] || ''}`}>{STATUS_LABEL[status] || status}</span>;
+
+export function Stars({ value, size = 16 }) {
+  const full = Math.round(value);
+  return (
+    <span className="stars" role="img" aria-label={`${value} out of 5 stars`}>
+      {[1, 2, 3, 4, 5].map((n) => <Star key={n} size={size} weight={n <= full ? 'fill' : 'regular'} aria-hidden="true" />)}
+    </span>
+  );
+}
+
+export function RatingLine({ avg, count, size }) {
+  if (!count) return null;
+  return (
+    <span className="rating-line">
+      <Stars value={avg} size={size} />
+      <span>{avg.toFixed(1)}</span>
+      <span className="muted">({count})</span>
+    </span>
+  );
+}
+
+export function WishlistButton({ productId, title, className = '' }) {
+  const wish = useWishlist();
+  const nav = useNavigate();
+  const { pathname, search } = useLocation();
+  const saved = wish.has(productId);
+  return (
+    <button
+      type="button"
+      className={`heart ${saved ? 'on' : ''} ${className}`}
+      aria-pressed={saved}
+      aria-label={saved ? `Remove ${title} from wishlist` : `Save ${title} to wishlist`}
+      onClick={async (e) => {
+        e.preventDefault();
+        try {
+          const now = await wish.toggle(productId);
+          if (now === null) {
+            toast('Sign in to save items to your wishlist');
+            nav(`/login?next=${encodeURIComponent(pathname + search)}`);
+          } else toast.success(now ? 'Saved to wishlist' : 'Removed from wishlist');
+        } catch (err) {
+          toast.error(err.message);
+        }
+      }}
+    >
+      <Heart size={22} weight={saved ? 'fill' : 'regular'} />
+    </button>
+  );
+}

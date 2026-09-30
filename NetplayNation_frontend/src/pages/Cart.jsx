@@ -1,22 +1,23 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { ShoppingCartSimple, Trash } from '@phosphor-icons/react';
+import { ShoppingCartSimple, Tag, Trash } from '@phosphor-icons/react';
 import { api, rupees } from '../api';
-import { useCart } from '../state';
+import { useAuth, useCart } from '../state';
 import { ErrorState, ProductImage, Qty, useTitle } from '../components/ui';
 
 // Fetches live prices for the cart and reconciles the stored cart with what is actually available.
 export function useQuote() {
-  const { items, setQty, remove } = useCart();
+  const { items, setQty, remove, coupon } = useCart();
+  const { user } = useAuth();
   const [quote, setQuote] = useState(null);
   const [error, setError] = useState(null);
-  const key = JSON.stringify(items);
+  const key = JSON.stringify([items, coupon, user?.id]);
 
   useEffect(() => {
-    if (!items.length) { setQuote({ lines: [], subtotal: 0, shipping: 0, total: 0 }); return; }
+    if (!items.length) { setQuote({ lines: [], subtotal: 0, shipping: 0, discount: 0, total: 0 }); return; }
     let live = true;
-    api('/cart/quote', { method: 'POST', body: { items: items.map((i) => ({ productId: i.id, qty: i.qty })) } })
+    api('/cart/quote', { method: 'POST', body: { items: items.map((i) => ({ productId: i.id, qty: i.qty })), coupon: coupon || undefined } })
       .then((q) => {
         if (!live) return;
         setError(null);
@@ -34,6 +35,43 @@ export function useQuote() {
   }, [key]);
 
   return { quote, error, items };
+}
+
+export function CouponBox({ quote }) {
+  const { coupon, setCoupon } = useCart();
+  const [input, setInput] = useState(coupon);
+  if (quote.couponCode) {
+    return (
+      <div className="coupon-applied">
+        <span><Tag size={18} /> <b>{quote.couponCode}</b> applied</span>
+        <button type="button" className="btn btn-sm btn-quiet" onClick={() => { setCoupon(''); setInput(''); }}>Remove</button>
+      </div>
+    );
+  }
+  const apply = () => {
+    const code = input.trim().toUpperCase();
+    if (code) setCoupon(code);
+  };
+  // A div, not a form: the coupon box also renders inside the checkout form.
+  return (
+    <div className="coupon">
+      <label htmlFor="coupon">Coupon code</label>
+      <div className="coupon-row">
+        <input
+          id="coupon"
+          className="input"
+          value={input}
+          maxLength={20}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); apply(); } }}
+          aria-invalid={Boolean(coupon && quote.couponError)}
+          aria-describedby={coupon && quote.couponError ? 'coupon-err' : undefined}
+        />
+        <button type="button" className="btn" onClick={apply}>Apply</button>
+      </div>
+      {coupon && quote.couponError && <span className="field-error" id="coupon-err" role="alert">{quote.couponError}</span>}
+    </div>
+  );
 }
 
 export default function Cart() {
@@ -86,8 +124,10 @@ export default function Cart() {
         <aside className="panel sticky" aria-label="Order summary">
           <h2 style={{ fontSize: '1.5rem', marginBottom: 10 }}>Order summary</h2>
           <div className="sum-row"><span>Subtotal</span><span>{rupees(quote.subtotal)}</span></div>
+          {quote.discount > 0 && <div className="sum-row" style={{ color: 'var(--ok)' }}><span>Discount ({quote.couponCode})</span><span>-{rupees(quote.discount)}</span></div>}
           <div className="sum-row"><span>Shipping</span><span>{quote.shipping === 0 ? 'Free' : rupees(quote.shipping)}</span></div>
           <div className="sum-row sum-total"><span>Total</span><span>{rupees(quote.total)}</span></div>
+          <div style={{ marginTop: 14 }}><CouponBox quote={quote} /></div>
           {left > 0 ? (
             <div style={{ marginTop: 14 }}>
               <span className="muted">Add {rupees(left)} more for free shipping</span>

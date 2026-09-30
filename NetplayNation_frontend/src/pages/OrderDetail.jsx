@@ -6,6 +6,7 @@ import { api, fmtDate, payOrder, rupees } from '../api';
 import { useAuth } from '../state';
 import { ErrorState, ProductImage, StatusBadge, useApi, useTitle } from '../components/ui';
 
+const PAYMENT_LABEL = { pending: 'pending', paid: 'paid', refunding: 'refund in progress', refunded: 'refunded' };
 const STEPS = [['placed', 'Placed'], ['packed', 'Packed'], ['shipped', 'Shipped'], ['delivered', 'Delivered']];
 
 export default function OrderDetail() {
@@ -22,7 +23,8 @@ export default function OrderDetail() {
   const { order: o, payment } = data;
   const reached = STEPS.findIndex(([s]) => s === o.status);
   const placedNow = params.get('placed') === '1' && o.status !== 'pending_payment' && o.status !== 'cancelled';
-  const canCancel = o.status === 'pending_payment' || (o.status === 'placed' && o.paymentStatus !== 'paid');
+  const canCancel = o.status === 'pending_payment' || o.status === 'placed';
+  const paidOnline = o.paymentMethod === 'razorpay' && o.paymentStatus === 'paid';
 
   const run = async (fn, okMsg) => {
     setBusy(true);
@@ -63,22 +65,29 @@ export default function OrderDetail() {
           {o.items.map((i) => (
             <div className="line" key={i.product} style={{ gridTemplateColumns: '64px 1fr auto', alignItems: 'center' }}>
               <div className="line-img" style={{ width: 64, height: 64 }}><ProductImage product={{ title: i.title, images: i.image ? [i.image] : [] }} size="sm" /></div>
-              <div><div className="line-title">{i.title}</div><span className="muted">Qty {i.qty} at {rupees(i.price)}</span></div>
+              <div>
+                <div className="line-title">{i.title}</div>
+                <span className="muted">Qty {i.qty} at {rupees(i.price)}</span>
+                {o.status === 'delivered' && i.slug && <div><Link to={`/product/${i.slug}#reviews-h`} className="link-more">Write a review</Link></div>}
+              </div>
               <b>{rupees(i.price * i.qty)}</b>
             </div>
           ))}
         </section>
         <aside className="panel" aria-label="Order details">
           <div className="sum-row"><span>Subtotal</span><span>{rupees(o.subtotal)}</span></div>
+          {o.discount > 0 && <div className="sum-row" style={{ color: 'var(--ok)' }}><span>Discount ({o.couponCode})</span><span>-{rupees(o.discount)}</span></div>}
           <div className="sum-row"><span>Shipping</span><span>{o.shipping === 0 ? 'Free' : rupees(o.shipping)}</span></div>
           <div className="sum-row sum-total"><span>Total</span><span>{rupees(o.total)}</span></div>
-          <p className="muted" style={{ marginTop: 12 }}>{o.paymentMethod === 'cod' ? 'Cash on delivery' : 'Online payment'}: {o.paymentStatus === 'paid' ? 'paid' : 'pending'}</p>
+          <p className="muted" style={{ marginTop: 12 }}>{o.paymentMethod === 'cod' ? 'Cash on delivery' : 'Online payment'}: {PAYMENT_LABEL[o.paymentStatus] || o.paymentStatus}</p>
+          {(o.paymentStatus === 'refunding' || o.paymentStatus === 'refunded') && <div className="alert alert-ok" style={{ marginTop: 12 }}>Your refund of {rupees(o.total)} has been started. It reaches your original payment method in 5 to 7 business days.</div>}
+          {o.refundFailed && o.paymentStatus === 'paid' && <div className="alert alert-warn" style={{ marginTop: 12 }}>We could not start your refund automatically. Our team has been alerted and will process it manually. You can also email us with your order number.</div>}
           <h3 style={{ marginTop: 18, fontSize: '1.1rem' }}>Delivering to</h3>
           <address style={{ fontStyle: 'normal', color: 'var(--ink-2)' }}>
             {o.address.name}<br />{o.address.line1}{o.address.line2 && <>, {o.address.line2}</>}<br />{o.address.city}, {o.address.state} {o.address.pincode}<br />{o.address.phone}
           </address>
           {canCancel && (
-            <button className="btn btn-danger btn-block" style={{ marginTop: 18 }} disabled={busy} onClick={() => window.confirm('Cancel this order?') && run(() => api(`/orders/${o.id}/cancel`, { method: 'POST' }), 'Order cancelled')}>Cancel order</button>
+            <button className="btn btn-danger btn-block" style={{ marginTop: 18 }} disabled={busy} onClick={() => window.confirm(paidOnline ? 'Cancel this order? Your payment will be refunded to your original payment method.' : 'Cancel this order?') && run(() => api(`/orders/${o.id}/cancel`, { method: 'POST' }), paidOnline ? 'Order cancelled. Your refund has been started.' : 'Order cancelled')}>{paidOnline ? 'Cancel and refund' : 'Cancel order'}</button>
           )}
           {!canCancel && o.status !== 'cancelled' && o.status !== 'delivered' && <p className="muted" style={{ marginTop: 14, fontSize: '.9rem' }}>Need to change something? Email us with your order number.</p>}
         </aside>
